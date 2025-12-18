@@ -698,6 +698,52 @@ def get_recent_urls_from_gsheet(hours: int = 3) -> set:
         logger.error(f"❌ 최근 URL 조회 실패: {e}")
         return set()
 
+def get_latest_news_from_gsheet(limit: int = 5):
+    """
+    구글 시트에서 최신 뉴스 N개 조회
+    
+    Args:
+        limit: 가져올 뉴스 개수 (기본 5개)
+    
+    Returns:
+        뉴스 리스트 (딕셔너리 형태)
+    """
+    global gsheet_worksheet
+    
+    if not gsheet_worksheet:
+        logger.warning("⚠️ Google Sheets not initialized")
+        return []
+    
+    try:
+        # 전체 레코드 가져오기
+        all_records = gsheet_worksheet.get_all_records()
+        
+        if not all_records:
+            logger.warning("⚠️ No records in Google Sheets")
+            return []
+        
+        # is_relevant=True인 뉴스만 필터링
+        relevant_news = [
+            record for record in all_records
+            if record.get('is_relevant', False) in [True, 'TRUE', 'True']
+        ]
+        
+        # timestamp 기준 최신순 정렬
+        relevant_news.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        # 상위 N개 추출
+        latest_news = relevant_news[:limit]
+        
+        logger.info(f"✅ 구글 시트 조회: {len(latest_news)}개 (전체 {len(all_records)}개 중)")
+        
+        return latest_news
+        
+    except Exception as e:
+        logger.error(f"❌ 최신 뉴스 조회 실패: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return []
+
 def init_csv_file():
     """Initialize CSV file with headers"""
     try:
