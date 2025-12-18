@@ -1,0 +1,2 @@
+# 500nyang_daily_news_bot
+500nyang_daily_news_bot
