@@ -1,12 +1,21 @@
+# FastAPI & Server
 fastapi[standard]
 uvicorn
-openai
 pydantic
+
+# Environment
 python-dotenv
-numpy
+
+# HTTP Requests
 requests
+
+# Web Scraping
 beautifulsoup4
 lxml
-redis
+
+# Google Sheets
 gspread
 google-auth
+
+# OpenAI (뉴스 필터링용)
+openai
