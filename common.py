@@ -1,5 +1,5 @@
 """
-REXA 공통 함수 모듈
+공통 함수 모듈
 - 뉴스 검색/필터링
 - 크롤링
 - 저장 (CSV, Google Sheets)
@@ -219,9 +219,11 @@ def filter_real_estate_news(title: str, description: str) -> dict:
         logging.warning("⚠️ OPENAI_API_KEY not set - using keyword filtering")
         return filter_by_keywords(title, description)
     
-    system_prompt = """당신은 부동산 뉴스 필터링 전문가입니다.
+    system_prompt = """당신은 부동산 뉴스 필터링 및 분류 전문가입니다.
 
-기사 제목과 설명을 보고 이것이 "부동산과 관련이 있는지" 판단하세요.
+기사 제목과 설명을 보고:
+1. 부동산과 관련이 있는지 판단
+2. 부동산 뉴스라면 어떤 카테고리에 속하는지 분류
 
 ✅ 부동산 관련 기사:
 - 아파트, 오피스텔, 상가, 토지 등 부동산 매매/임대
@@ -239,6 +241,14 @@ def filter_real_estate_news(title: str, description: str) -> dict:
 - 정치, 사회, 문화 이슈
 - 건설사 실적이지만 부동산과 직접 연관 없음
 
+📂 카테고리 분류 기준:
+1. "정책·제도": 정부 정책, 법안, 규제, 제도 개편
+2. "시장 동향·시황": 가격 변동, 거래량, 시장 분석
+3. "분양·청약": 아파트 분양, 청약, 입주
+4. "개발·재건축·재개발": 재건축, 재개발, 신규 개발
+5. "금융·대출·금리": 주택담보대출, 금리, DSR/LTV
+6. "세금·법률·규제": 취득세, 양도세, 종부세, 법률 이슈
+
 JSON 형식으로 응답:
 {
   "is_relevant": true/false,
@@ -247,6 +257,7 @@ JSON 형식으로 응답:
   "region": "지역명" or null,
   "has_price": true/false,
   "has_policy": true/false,
+  "category": "카테고리명" or null,
   "reason": "판단 근거 1-2줄"
 }"""
 
@@ -311,6 +322,7 @@ def filter_by_keywords(title: str, description: str) -> dict:
         'region': region,
         'has_price': any(kw in text for kw in ['가격', '시세', '억', '만원', '상승', '하락']),
         'has_policy': any(kw in text for kw in ['정책', '규제', '세금', '대출', '금리']),
+        'category': None,  # 키워드 필터는 카테고리 분류 안함
         'reason': f'키워드 매칭 기반 ({matched}개 매칭)'
     }
 
@@ -549,23 +561,52 @@ def init_google_sheets():
         logger.error("❌ gspread not installed")
         return False
     
-    if not GOOGLE_SHEETS_CREDENTIALS or not GOOGLE_SHEETS_SPREADSHEET_ID:
-        logger.error("❌ Google Sheets 환경변수 미설정")
+    # 환경변수 체크
+    if not GOOGLE_SHEETS_CREDENTIALS:
+        logger.error("❌ GOOGLE_SHEETS_CREDENTIALS 환경변수 미설정")
+        return False
+    
+    if not GOOGLE_SHEETS_SPREADSHEET_ID:
+        logger.error("❌ GOOGLE_SHEETS_SPREADSHEET_ID 환경변수 미설정")
         return False
     
     try:
         logger.info("🔄 Initializing Google Sheets...")
+        logger.info(f"   환경변수 길이: CREDENTIALS={len(GOOGLE_SHEETS_CREDENTIALS)} chars")
+        logger.info(f"   Spreadsheet ID: {GOOGLE_SHEETS_SPREADSHEET_ID}")
         
-        creds_dict = json.loads(GOOGLE_SHEETS_CREDENTIALS)
+        # JSON 파싱
+        try:
+            creds_dict = json.loads(GOOGLE_SHEETS_CREDENTIALS)
+            logger.info(f"   ✅ JSON 파싱 성공")
+            logger.info(f"   Service Account: {creds_dict.get('client_email', 'N/A')}")
+        except json.JSONDecodeError as je:
+            logger.error(f"❌ JSON 파싱 실패: {je}")
+            logger.error(f"   환경변수 앞부분 (처음 200자): {GOOGLE_SHEETS_CREDENTIALS[:200]}")
+            return False
+        
+        # 인증
         scopes = [
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/drive'
         ]
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gsheet_client = gspread.authorize(credentials)
+        logger.info(f"   ✅ 인증 성공")
         
-        spreadsheet = gsheet_client.open_by_key(GOOGLE_SHEETS_SPREADSHEET_ID)
-        gsheet_worksheet = spreadsheet.sheet1
+        # 스프레드시트 열기
+        try:
+            spreadsheet = gsheet_client.open_by_key(GOOGLE_SHEETS_SPREADSHEET_ID)
+            gsheet_worksheet = spreadsheet.sheet1
+            logger.info(f"   ✅ 스프레드시트 연결: {spreadsheet.title}")
+        except gspread.exceptions.SpreadsheetNotFound:
+            logger.error(f"❌ 스프레드시트를 찾을 수 없습니다 (ID: {GOOGLE_SHEETS_SPREADSHEET_ID})")
+            logger.error(f"   서비스 계정 이메일({creds_dict.get('client_email')})을")
+            logger.error(f"   스프레드시트에 공유했는지 확인하세요!")
+            return False
+        except gspread.exceptions.APIError as ae:
+            logger.error(f"❌ Google Sheets API 오류: {ae}")
+            return False
         
         # 헤더 확인 및 생성
         try:
@@ -574,21 +615,34 @@ def init_google_sheets():
                 gsheet_worksheet.insert_row([
                     'timestamp', 'title', 'description', 'url',
                     'is_relevant', 'relevance_score', 'keywords', 'region',
+                    'category',
                     'has_price', 'has_policy', 'reason', 'user_id'
                 ], 1)
-                logger.info("✅ Google Sheets headers created")
-        except:
-            gsheet_worksheet.insert_row([
-                'timestamp', 'title', 'description', 'url',
-                'is_relevant', 'relevance_score', 'keywords', 'region',
-                'has_price', 'has_policy', 'reason', 'user_id'
-            ], 1)
+                logger.info("   ✅ Google Sheets 헤더 생성")
+        except Exception as he:
+            logger.warning(f"⚠️ 헤더 생성 시도 중 오류: {he}")
+            try:
+                gsheet_worksheet.insert_row([
+                    'timestamp', 'title', 'description', 'url',
+                    'is_relevant', 'relevance_score', 'keywords', 'region',
+                    'category',
+                    'has_price', 'has_policy', 'reason', 'user_id'
+                ], 1)
+            except:
+                pass
         
-        logger.info(f"✅ Google Sheets initialized")
+        logger.info(f"✅ Google Sheets 초기화 완료")
         return True
         
+    except ImportError as ie:
+        logger.error(f"❌ 라이브러리 import 실패: {ie}")
+        logger.error(f"   requirements.txt에 gspread, google-auth가 포함되어 있는지 확인하세요")
+        return False
+        
     except Exception as e:
-        logger.error(f"❌ Failed to initialize Google Sheets: {e}")
+        import traceback
+        logger.error(f"❌ Google Sheets 초기화 실패: {type(e).__name__}: {str(e)}")
+        logger.error(f"\n전체 에러 스택:\n{traceback.format_exc()}")
         return False
 
 def get_recent_urls_from_gsheet(hours: int = 3) -> set:
@@ -653,6 +707,7 @@ def init_csv_file():
                 writer.writerow([
                     'timestamp', 'title', 'description', 'url',
                     'is_relevant', 'relevance_score', 'keywords', 'region',
+                    'category',
                     'has_price', 'has_policy', 'reason', 'user_id'
                 ])
             logger.info(f"✅ CSV file created: {CSV_FILE_PATH}")
@@ -675,6 +730,7 @@ def save_news_to_csv(news_data: dict):
                 news_data.get('relevance_score', 0),
                 ', '.join(news_data.get('keywords', [])),
                 news_data.get('region', ''),
+                news_data.get('category', ''),
                 news_data.get('has_price', False),
                 news_data.get('has_policy', False),
                 news_data.get('reason', ''),
@@ -701,6 +757,7 @@ def save_news_to_gsheet(news_data: dict):
             news_data.get('relevance_score', 0),
             ', '.join(news_data.get('keywords', [])),
             news_data.get('region', ''),
+            news_data.get('category', ''),
             news_data.get('has_price', False),
             news_data.get('has_policy', False),
             news_data.get('reason', ''),
@@ -733,6 +790,7 @@ async def save_all_news_background(news_items: list, user_id: str):
                 news_item['relevance_score'] = 50
                 news_item['keywords'] = []
                 news_item['region'] = ''
+                news_item['category'] = ''
                 news_item['has_price'] = False
                 news_item['has_policy'] = False
                 news_item['reason'] = 'Filtering module not available'
