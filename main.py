@@ -1,12 +1,11 @@
 """
 오백냥(500nyang) 부동산 뉴스봇 서버
-- 현재 작동 중인 common.py를 그대로 사용
-- FastAPI 웹 서버만 추가
+- 카카오톡 스킬 완전 호환
 """
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -15,8 +14,7 @@ from pydantic import BaseModel
 from common import (
     get_latest_news_from_gsheet,
     init_google_sheets,
-    init_csv_file,
-    gsheet_worksheet
+    init_csv_file
 )
 
 # ================================================================================
@@ -36,18 +34,36 @@ app = FastAPI(
 )
 
 # ================================================================================
-# Pydantic 모델
+# Pydantic 모델 - 카카오톡 스킬 완전 호환
 # ================================================================================
 
 class UserInfo(BaseModel):
     id: str
+    properties: Optional[Dict[str, Any]] = None
 
 class UserRequest(BaseModel):
     user: UserInfo
     utterance: Optional[str] = ""
+    params: Optional[Dict[str, Any]] = {}
+    block: Optional[Dict[str, Any]] = {}
+    lang: Optional[str] = None
+
+class Action(BaseModel):
+    name: Optional[str] = None
+    clientExtra: Optional[Dict[str, Any]] = None
+    params: Optional[Dict[str, Any]] = {}
+    detailParams: Optional[Dict[str, Any]] = {}
+    id: Optional[str] = None
+
+class Bot(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
 
 class RequestBody(BaseModel):
     userRequest: UserRequest
+    action: Optional[Action] = None
+    bot: Optional[Bot] = None
+    contexts: Optional[list] = []
 
 # ================================================================================
 # API 엔드포인트
@@ -97,12 +113,14 @@ async def news_bot(request: RequestBody):
         
         for idx, item in enumerate(news_items, 1):
             title = item.get('title', '제목 없음')
-            # url과 link 둘 다 확인
-            url = item.get('url') or item.get('link', '')
+            # url, link, originallink 모두 확인
+            url = item.get('url') or item.get('link') or item.get('originallink', '')
             
             if not url:
                 logger.warning(f"   ⚠️ 뉴스 {idx} URL 없음")
                 url = "(URL 정보 없음)"
+            else:
+                logger.info(f"   뉴스 {idx}: URL = {url[:50]}")
             
             news_list += f"{idx}. {title}\n{url}\n\n"
         
