@@ -1,17 +1,15 @@
 services:
+
   # ========================================
-  # 1. 카카오톡 봇 서버 (24시간 실행)
+  # 오백냥 웹 서버 (카카오톡 봇)
   # ========================================
   - type: web
-    name: 500nyang_daily_news_bot
+    name: 500nyang-news-bot
     runtime: python
     plan: free
-    autoDeploy: false
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: UPSTAGE_API_KEY
-        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: NAVER_CLIENT_ID
@@ -22,9 +20,5 @@ services:
         sync: false
       - key: GOOGLE_SHEETS_SPREADSHEET_ID
         sync: false
-      - key: API_TIMEOUT
-        value: "3"
-      - key: HEALTH_CHECK_INTERVAL
-        value: "5"
-
-
+    # Health check 설정
+    healthCheckPath: /health/ping
