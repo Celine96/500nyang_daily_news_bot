@@ -1,6 +1,6 @@
 """
 오백냥(500nyang) 부동산 뉴스봇 서버
-- 카카오톡 스킬 완전 호환
+- 카테고리별 뉴스 제공
 """
 
 import logging
@@ -29,12 +29,55 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="오백냥 - 부동산 뉴스봇",
-    description="카카오톡 부동산 뉴스 제공 서비스",
-    version="1.0.0"
+    description="카카오톡 부동산 뉴스 제공 서비스 (카테고리별)",
+    version="2.0.0"
 )
 
 # ================================================================================
-# Pydantic 모델 - 카카오톡 스킬 완전 호환
+# 카테고리 매핑
+# ================================================================================
+
+CATEGORY_MAP = {
+    "정책": "정책·제도",
+    "제도": "정책·제도",
+    "정책제도": "정책·제도",
+    
+    "시장": "시장 동향·시황",
+    "동향": "시장 동향·시황",
+    "시황": "시장 동향·시황",
+    "시장동향": "시장 동향·시황",
+    
+    "분양": "분양·청약",
+    "청약": "분양·청약",
+    "분양청약": "분양·청약",
+    
+    "개발": "개발·재건축·재개발",
+    "재건축": "개발·재건축·재개발",
+    "재개발": "개발·재건축·재개발",
+    "개발재건축": "개발·재건축·재개발",
+    
+    "금융": "금융·대출·금리",
+    "대출": "금융·대출·금리",
+    "금리": "금융·대출·금리",
+    "금융대출": "금융·대출·금리",
+    
+    "세금": "세금·법률·규제",
+    "법률": "세금·법률·규제",
+    "규제": "세금·법률·규제",
+    "세금법률": "세금·법률·규제",
+}
+
+CATEGORY_EMOJI = {
+    "정책·제도": "📋",
+    "시장 동향·시황": "📊",
+    "분양·청약": "🏗️",
+    "개발·재건축·재개발": "🏢",
+    "금융·대출·금리": "💰",
+    "세금·법률·규제": "⚖️",
+}
+
+# ================================================================================
+# Pydantic 모델
 # ================================================================================
 
 class UserInfo(BaseModel):
@@ -66,13 +109,74 @@ class RequestBody(BaseModel):
     contexts: Optional[list] = []
 
 # ================================================================================
+# 카테고리 감지 함수
+# ================================================================================
+
+def detect_category(user_message: str) -> Optional[str]:
+    """
+    사용자 발화에서 카테고리 감지
+    
+    Args:
+        user_message: 사용자 발화 내용
+        
+    Returns:
+        감지된 카테고리 또는 None
+    """
+    if not user_message:
+        return None
+    
+    # 공백 제거 후 소문자 변환
+    message = user_message.replace(" ", "").lower()
+    
+    # 카테고리 매핑에서 찾기
+    for keyword, category in CATEGORY_MAP.items():
+        if keyword in message:
+            logger.info(f"🎯 카테고리 감지: '{keyword}' → '{category}'")
+            return category
+    
+    return None
+
+def get_news_by_category(category: str, limit: int = 3) -> list:
+    """
+    특정 카테고리의 최신 뉴스 조회
+    
+    Args:
+        category: 카테고리명
+        limit: 조회할 뉴스 개수
+        
+    Returns:
+        뉴스 리스트
+    """
+    try:
+        # 전체 뉴스 조회
+        all_news = get_latest_news_from_gsheet(limit=100)
+        
+        if not all_news:
+            return []
+        
+        # 카테고리 필터링
+        filtered_news = [
+            news for news in all_news
+            if news.get('category') == category
+        ]
+        
+        logger.info(f"📊 카테고리 '{category}': {len(filtered_news)}개 (전체 {len(all_news)}개 중)")
+        
+        # 상위 N개만 반환
+        return filtered_news[:limit]
+        
+    except Exception as e:
+        logger.error(f"❌ 카테고리별 뉴스 조회 실패: {e}")
+        return []
+
+# ================================================================================
 # API 엔드포인트
 # ================================================================================
 
 @app.post("/news")
 async def news_bot(request: RequestBody):
     """
-    부동산 뉴스봇 - 최신 뉴스 5개 제공
+    부동산 뉴스봇 - 카테고리별 뉴스 3개 제공
     """
     logger.info("=" * 50)
     logger.info("📰 News bot request")
@@ -85,8 +189,18 @@ async def news_bot(request: RequestBody):
         logger.info(f"   User: {user_id}")
         logger.info(f"   Message: '{user_message}'")
         
-        # 구글 시트에서 최신 뉴스 5개 조회
-        news_items = get_latest_news_from_gsheet(limit=5)
+        # 카테고리 감지
+        category = detect_category(user_message)
+        
+        if category:
+            # 카테고리별 뉴스 조회
+            news_items = get_news_by_category(category, limit=3)
+            category_emoji = CATEGORY_EMOJI.get(category, "📰")
+            title_text = f"{category_emoji} {category} 뉴스 (총 {len(news_items)}건)"
+        else:
+            # 전체 최신 뉴스 5개 조회
+            news_items = get_latest_news_from_gsheet(limit=5)
+            title_text = f"📰 오늘의 부동산 뉴스 (총 {len(news_items)}건)"
         
         if not news_items:
             logger.warning("⚠️ 구글 시트에 뉴스 없음")
@@ -105,11 +219,11 @@ async def news_bot(request: RequestBody):
         for idx, item in enumerate(news_items, 1):
             logger.info(
                 f"   [{idx}] {item.get('title', '')[:40]}... "
-                f"(점수: {item.get('relevance_score', 0)})"
+                f"(카테고리: {item.get('category', 'N/A')}, 점수: {item.get('relevance_score', 0)})"
             )
         
         # 뉴스 리스트 텍스트 생성
-        news_list = f"📰 오늘의 부동산 뉴스 (총 {len(news_items)}건)\n\n"
+        news_list = f"{title_text}\n\n"
         
         for idx, item in enumerate(news_items, 1):
             title = item.get('title', '제목 없음')
@@ -159,7 +273,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "오백냥 부동산 뉴스봇",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -179,7 +293,7 @@ async def health_ping():
 async def startup_event():
     """Initialize resources on startup"""
     logger.info("=" * 70)
-    logger.info("🚀 Starting 오백냥 뉴스봇 서버...")
+    logger.info("🚀 Starting 오백냥 뉴스봇 서버 (카테고리별)...")
     logger.info("=" * 70)
     
     # CSV/Sheets 초기화
@@ -193,8 +307,11 @@ async def startup_event():
     
     logger.info("=" * 70)
     logger.info("✅ 오백냥 뉴스봇 서버 시작 완료!")
-    logger.info("   - 서비스: 부동산 뉴스 제공")
+    logger.info("   - 서비스: 카테고리별 부동산 뉴스 제공")
     logger.info("   - 엔드포인트: /news")
+    logger.info("   - 카테고리:")
+    for cat in CATEGORY_EMOJI.keys():
+        logger.info(f"      • {cat}")
     logger.info("=" * 70)
 
 @app.on_event("shutdown")
