@@ -1,6 +1,7 @@
 """
 오백냥(500nyang) 부동산 뉴스봇 서버
 - 카테고리별 뉴스 제공
+- /new와 /news 모두 지원
 """
 
 import logging
@@ -170,13 +171,12 @@ def get_news_by_category(category: str, limit: int = 3) -> list:
         return []
 
 # ================================================================================
-# API 엔드포인트
+# 뉴스봇 핸들러 (공통 로직)
 # ================================================================================
 
-@app.post("/news")
-async def news_bot(request: RequestBody):
+async def handle_news_request(request: RequestBody):
     """
-    부동산 뉴스봇 - 카테고리별 뉴스 3개 제공
+    뉴스봇 요청 처리 (공통 로직)
     """
     logger.info("=" * 50)
     logger.info("📰 News bot request")
@@ -267,6 +267,25 @@ async def news_bot(request: RequestBody):
             }
         }
 
+# ================================================================================
+# API 엔드포인트
+# ================================================================================
+
+@app.post("/news")
+async def news_bot(request: RequestBody):
+    """
+    부동산 뉴스봇 - 카테고리별 뉴스 3개 제공 (/news)
+    """
+    return await handle_news_request(request)
+
+@app.post("/new")
+async def news_bot_legacy(request: RequestBody):
+    """
+    부동산 뉴스봇 - 카테고리별 뉴스 3개 제공 (/new - 하위 호환)
+    """
+    logger.warning("⚠️ /new 엔드포인트 사용됨 (deprecated, /news 사용 권장)")
+    return await handle_news_request(request)
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -283,6 +302,19 @@ async def health_ping():
     return {
         "alive": True,
         "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "service": "오백냥 부동산 뉴스봇",
+        "version": "2.0.0",
+        "endpoints": {
+            "news": "/news (권장)",
+            "new": "/new (하위 호환)",
+            "health": "/health"
+        }
     }
 
 # ================================================================================
@@ -308,7 +340,7 @@ async def startup_event():
     logger.info("=" * 70)
     logger.info("✅ 오백냥 뉴스봇 서버 시작 완료!")
     logger.info("   - 서비스: 카테고리별 부동산 뉴스 제공")
-    logger.info("   - 엔드포인트: /news")
+    logger.info("   - 엔드포인트: /news (권장), /new (하위 호환)")
     logger.info("   - 카테고리:")
     for cat in CATEGORY_EMOJI.keys():
         logger.info(f"      • {cat}")
