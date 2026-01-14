@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="오백냥 - 부동산 뉴스봇",
     description="카카오톡 부동산 뉴스 제공 서비스 (카테고리별)",
-    version="2.0.0"
+    version="2.0.1"
 )
 
 # ================================================================================
@@ -137,6 +137,16 @@ def detect_category(user_message: str) -> Optional[str]:
     
     return None
 
+def normalize_category(category: str) -> str:
+    """
+    카테고리 문자열 정규화 (공백, 특수문자 통일)
+    """
+    if not category:
+        return ""
+    # 앞뒤 공백 제거, 소문자 변환
+    normalized = category.strip()
+    return normalized
+
 def get_news_by_category(category: str, limit: int = 3) -> list:
     """
     특정 카테고리의 최신 뉴스 조회
@@ -149,25 +159,47 @@ def get_news_by_category(category: str, limit: int = 3) -> list:
         뉴스 리스트
     """
     try:
-        # 전체 뉴스 조회
-        all_news = get_latest_news_from_gsheet(limit=100)
+        # 전체 뉴스 조회 (더 많이 가져오기)
+        all_news = get_latest_news_from_gsheet(limit=200)
         
         if not all_news:
+            logger.warning("⚠️ 구글 시트에 뉴스가 없습니다")
             return []
         
-        # 카테고리 필터링
-        filtered_news = [
-            news for news in all_news
-            if news.get('category') == category
-        ]
+        # 정규화된 카테고리로 비교
+        normalized_target = normalize_category(category)
+        logger.info(f"🔍 찾으려는 카테고리: '{normalized_target}'")
         
-        logger.info(f"📊 카테고리 '{category}': {len(filtered_news)}개 (전체 {len(all_news)}개 중)")
+        # 카테고리 필터링 (대소문자 구분 없이)
+        filtered_news = []
+        
+        # 디버깅: 모든 카테고리 출력
+        all_categories = set()
+        for news in all_news:
+            news_category = normalize_category(news.get('category', ''))
+            all_categories.add(news_category)
+            
+            # 카테고리 비교 (대소문자 구분 없이)
+            if news_category.lower() == normalized_target.lower():
+                filtered_news.append(news)
+        
+        logger.info(f"📊 구글 시트의 모든 카테고리: {all_categories}")
+        logger.info(f"📊 카테고리 '{normalized_target}': {len(filtered_news)}개 (전체 {len(all_news)}개 중)")
+        
+        # 디버깅: 매칭된 뉴스 로그
+        for idx, news in enumerate(filtered_news[:5]):
+            logger.info(
+                f"   [{idx+1}] {news.get('title', '')[:40]}... "
+                f"(카테고리: '{news.get('category', 'N/A')}')"
+            )
         
         # 상위 N개만 반환
         return filtered_news[:limit]
         
     except Exception as e:
         logger.error(f"❌ 카테고리별 뉴스 조회 실패: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return []
 
 # ================================================================================
@@ -196,6 +228,23 @@ async def handle_news_request(request: RequestBody):
             # 카테고리별 뉴스 조회
             news_items = get_news_by_category(category, limit=3)
             category_emoji = CATEGORY_EMOJI.get(category, "📰")
+            
+            if not news_items:
+                # 카테고리는 감지했지만 해당 뉴스가 없는 경우
+                logger.warning(f"⚠️ '{category}' 카테고리 뉴스 없음")
+                return {
+                    "version": "2.0",
+                    "template": {
+                        "outputs": [
+                            {
+                                "simpleText": {
+                                    "text": f"{category_emoji} '{category}' 카테고리의 최신 뉴스가 아직 없습니다.\n\n잠시 후 다시 시도해주시거나, 다른 카테고리를 선택해주세요."
+                                }
+                            }
+                        ]
+                    }
+                }
+            
             title_text = f"{category_emoji} {category} 뉴스 (총 {len(news_items)}건)"
         else:
             # 전체 최신 뉴스 5개 조회
@@ -292,7 +341,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "오백냥 부동산 뉴스봇",
-        "version": "2.0.0",
+        "version": "2.0.1",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -309,7 +358,7 @@ async def root():
     """Root endpoint"""
     return {
         "service": "오백냥 부동산 뉴스봇",
-        "version": "2.0.0",
+        "version": "2.0.1",
         "endpoints": {
             "news": "/news (권장)",
             "new": "/new (하위 호환)",
