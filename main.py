@@ -2,13 +2,14 @@
 오백냥(500nyang) 부동산 뉴스봇 서버
 - 카테고리별 뉴스 제공
 - /new와 /news 모두 지원
+- 디버깅 기능 추가
 """
 
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 # 현재 작동 중인 common.py에서 import
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="오백냥 - 부동산 뉴스봇",
     description="카카오톡 부동산 뉴스 제공 서비스 (카테고리별)",
-    version="2.0.1"
+    version="2.0.2"
 )
 
 # ================================================================================
@@ -143,7 +144,7 @@ def normalize_category(category: str) -> str:
     """
     if not category:
         return ""
-    # 앞뒤 공백 제거, 소문자 변환
+    # 앞뒤 공백 제거
     normalized = category.strip()
     return normalized
 
@@ -325,6 +326,7 @@ async def news_bot(request: RequestBody):
     """
     부동산 뉴스봇 - 카테고리별 뉴스 3개 제공 (/news)
     """
+    logger.info("🚨 /news 엔드포인트 호출됨!")
     return await handle_news_request(request)
 
 @app.post("/new")
@@ -332,8 +334,69 @@ async def news_bot_legacy(request: RequestBody):
     """
     부동산 뉴스봇 - 카테고리별 뉴스 3개 제공 (/new - 하위 호환)
     """
-    logger.warning("⚠️ /new 엔드포인트 사용됨 (deprecated, /news 사용 권장)")
+    logger.warning("🚨 /new 엔드포인트 호출됨! (deprecated, /news 사용 권장)")
     return await handle_news_request(request)
+
+# ================================================================================
+# 디버깅 엔드포인트 추가
+# ================================================================================
+
+@app.get("/debug/categories")
+async def debug_categories():
+    """
+    현재 구글 시트의 모든 카테고리 조회 (디버깅용)
+    """
+    try:
+        all_news = get_latest_news_from_gsheet(limit=200)
+        
+        if not all_news:
+            return {
+                "error": "구글 시트에 뉴스가 없습니다",
+                "total": 0,
+                "categories": []
+            }
+        
+        # 카테고리별 개수 계산
+        category_count = {}
+        for news in all_news:
+            cat = news.get('category', '(카테고리 없음)')
+            category_count[cat] = category_count.get(cat, 0) + 1
+        
+        return {
+            "total_news": len(all_news),
+            "categories": category_count,
+            "category_list": list(category_count.keys())
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ 디버깅 실패: {e}")
+        return {
+            "error": str(e)
+        }
+
+@app.post("/debug/test")
+async def debug_test(request: Request):
+    """
+    POST 요청 테스트 (디버깅용)
+    """
+    try:
+        body = await request.json()
+        logger.info("=" * 50)
+        logger.info("🔍 디버그 POST 요청 수신")
+        logger.info(f"   Body: {body}")
+        logger.info("=" * 50)
+        
+        return {
+            "status": "success",
+            "received": body,
+            "message": "POST 요청이 정상적으로 처리되었습니다"
+        }
+    except Exception as e:
+        logger.error(f"❌ 디버그 요청 처리 실패: {e}")
+        return {
+            "status": "error",
+            "error": str(e)
+        }
 
 @app.get("/health")
 async def health_check():
@@ -341,7 +404,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "오백냥 부동산 뉴스봇",
-        "version": "2.0.1",
+        "version": "2.0.2",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -358,11 +421,13 @@ async def root():
     """Root endpoint"""
     return {
         "service": "오백냥 부동산 뉴스봇",
-        "version": "2.0.1",
+        "version": "2.0.2",
         "endpoints": {
             "news": "/news (권장)",
             "new": "/new (하위 호환)",
-            "health": "/health"
+            "health": "/health",
+            "debug_categories": "/debug/categories (디버깅용)",
+            "debug_test": "/debug/test (POST 테스트용)"
         }
     }
 
@@ -390,6 +455,7 @@ async def startup_event():
     logger.info("✅ 오백냥 뉴스봇 서버 시작 완료!")
     logger.info("   - 서비스: 카테고리별 부동산 뉴스 제공")
     logger.info("   - 엔드포인트: /news (권장), /new (하위 호환)")
+    logger.info("   - 디버깅: /debug/categories, /debug/test")
     logger.info("   - 카테고리:")
     for cat in CATEGORY_EMOJI.keys():
         logger.info(f"      • {cat}")
